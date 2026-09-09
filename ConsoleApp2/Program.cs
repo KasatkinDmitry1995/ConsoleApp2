@@ -1,39 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.IO;
+﻿using Microsoft.VisualBasic.FileIO;
+using System.Collections.Concurrent;
+using System.CommandLine;
+using System.CommandLine.Parsing;
 using System.Diagnostics;
-using System.Net.Http;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
 
 namespace ConsoleApp1
 {
-
-    public class ProgressReporter : IProgress<int>
-    {
-        private readonly int _total;
-        private readonly int _barSize;
-
-        public ProgressReporter(int total, int barSize = 50)
-        {
-            _total = total;
-            _barSize = barSize;
-        }
-
-        public void Report(int value)
-        {
-            double percent = (double)value / _total;
-            int filled = (int)(percent * _barSize);
-
-            Console.Write($"\r[");
-            Console.Write(new string('█', filled));
-            Console.Write(new string('░', _barSize - filled));
-            Console.Write($"] {percent:P0}");
-        }
-    }
 
     public record CheckResultRecord(string Link, CheckResult Result, long ElapsedMilliseconds)
     {
@@ -41,7 +13,7 @@ namespace ConsoleApp1
         {
             if (Result == CheckResult.OK)
                 return $"{Link,-35}  Статус:{Result}  Ожидание:{ElapsedMilliseconds} мс";
-  
+
             return $"{Link,-35}  Статус:{Result}";
         }
     }
@@ -69,14 +41,44 @@ namespace ConsoleApp1
         static async Task Main(string[] args)
         {
 
-            AppContext.SetSwitch("System.Net.DisableIPv6", true);
+            var filenameOpt = new Option<string>("--filename")
+            {
+                Description = "Имя файла. По-умолчанию \"links.txt\".",
+                DefaultValueFactory = parseResult => "links.txt",
+            };
 
-            String filename;
+            var maxThreadsOpt = new Option<int>("--max_threads")
+            {
+                Description = "Число потоков. По-умолчанию 5.",
+                DefaultValueFactory = parseResult => 5,
+            };
 
-            if (args.Length == 0)
-                filename = @"links.txt";
-            else
-                filename = args[0];
+            var timeoutOpt = new Option<int>("--timeout")
+            {
+                Description = "Таймаут в секундах, сколько мы ждем ответ от сервера. По-умолчанию 5.",
+                DefaultValueFactory = parseResult => 5,
+            };
+
+            RootCommand rootCommand = new();
+            rootCommand.Options.Add(filenameOpt);
+            rootCommand.Options.Add(maxThreadsOpt);
+            rootCommand.Options.Add(timeoutOpt);
+
+            rootCommand.SetAction(async parseResult =>
+            {
+                await RunProgram(
+                        parseResult.GetValue(filenameOpt),
+                        parseResult.GetValue(maxThreadsOpt),
+                        parseResult.GetValue(timeoutOpt));
+            });
+
+            ParseResult parseResult = rootCommand.Parse(args);
+            await parseResult.InvokeAsync();
+
+        }
+
+        static async Task RunProgram(string filename, int maxThreads, int timeout)
+        {
 
             string[] links;
 
@@ -91,60 +93,71 @@ namespace ConsoleApp1
                 return;
             }
 
-            Stopwatch sw = new Stopwatch();
-            var resultList = new List<CheckResultRecord>();
+            var resultList = new ConcurrentBag<CheckResultRecord>();
+            int completedCount = 0;
+            var semaphore = new SemaphoreSlim(maxThreads);
+            object _progressLock = new object();
             var progress = new ProgressReporter(links.Count());
-
 
             using (HttpClient client = new HttpClient())
             {
 
-                HttpResponseMessage response;
-                client.Timeout = TimeSpan.FromSeconds(5);
+                client.Timeout = TimeSpan.FromSeconds(timeout);
 
-                foreach (String link in links)
-                { 
+                var tasks = links.Select(async link =>
+                {
+
+                    await semaphore.WaitAsync();
                     try
                     {
-                        sw.Restart();
-                        response = await client.GetAsync(link);
+                        Stopwatch sw = new Stopwatch();
+                        sw.Start();
+                        var response = await client.GetAsync(link);
                         sw.Stop();
 
                         var result = FromHttpStatusCode((int)response.StatusCode);
                         resultList.Add(new CheckResultRecord(link, result, sw.ElapsedMilliseconds));
                     }
-                    catch (TaskCanceledException ex)
+                    catch (TaskCanceledException)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.TIMEOUT, 0));
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.ERROR, 0));
-                    }finally
-                    {
-                        progress.Report(resultList.Count());
                     }
-                }
+                    finally
+                    {
+                        semaphore.Release();
+                        lock (_progressLock)
+                        {
+                            progress.Report(++completedCount);
+                        }
+                    }
+
+                });
+
+                await Task.WhenAll(tasks);
+
+                var resultListSorted = resultList.OrderBy(r => r.Result).ToList();
+
+                Console.Clear();
+
+                foreach (CheckResultRecord result in resultListSorted)
+                    Console.WriteLine(result);
+
+                var resultCounts = from r in resultListSorted
+                                   group r by r.Result into g
+                                   select new { Result = g.Key, Count = g.Count() };
+
+                Console.WriteLine($"Всего проанализировано ссылок: {resultListSorted.Count}");
+                Console.WriteLine("Из них:");
+
+                foreach (var resultCount in resultCounts)
+                    Console.WriteLine($"{resultCount.Result}: {resultCount.Count}");
+
+                Console.ReadKey();
             }
-
-            resultList.Sort((r1, r2) => r1.Result.CompareTo(r2.Result));
-
-            Console.Clear();
-
-            foreach (CheckResultRecord result in resultList)
-                Console.WriteLine(result);
-
-            var resultCounts = from r in resultList
-                      group r by r.Result into g
-                      select new { Result = g.Key, Count = g.Count() };
-
-            Console.WriteLine($"Всего проанализировано ссылок: {resultList.Count}");
-            Console.WriteLine("Из них:");
-
-            foreach(var resultCount in resultCounts)
-                Console.WriteLine($"{resultCount.Result}: {resultCount.Count}");
-
-            Console.ReadKey();
         }
     }
 }

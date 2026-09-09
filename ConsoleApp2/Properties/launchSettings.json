@@ -1,0 +1,16 @@
+{
+  "profiles": {
+    "ConsoleApp2": {
+      "commandName": "Project",
+      "commandLineArgs": "--timeout 2"
+    },
+    "С 15 потоками": {
+      "commandName": "Project",
+      "commandLineArgs": "--max_threads 15"
+    },
+    "help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    }
+  }
+}
