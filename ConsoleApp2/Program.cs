@@ -1,14 +1,8 @@
-﻿using System;
+﻿using Microsoft.VisualBasic.FileIO;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
+using System.CommandLine;
+using System.CommandLine.Parsing;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Net.Http;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace ConsoleApp1
 {
@@ -19,7 +13,7 @@ namespace ConsoleApp1
         {
             if (Result == CheckResult.OK)
                 return $"{Link,-35}  Статус:{Result}  Ожидание:{ElapsedMilliseconds} мс";
-  
+
             return $"{Link,-35}  Статус:{Result}";
         }
     }
@@ -47,14 +41,44 @@ namespace ConsoleApp1
         static async Task Main(string[] args)
         {
 
-            AppContext.SetSwitch("System.Net.DisableIPv6", true);
+            var filenameOpt = new Option<string>("--filename")
+            {
+                Description = "Имя файла. По-умолчанию \"links.txt\".",
+                DefaultValueFactory = parseResult => "links.txt",
+            };
 
-            String filename;
+            var maxThreadsOpt = new Option<int>("--max_threads")
+            {
+                Description = "Число потоков. По-умолчанию 5.",
+                DefaultValueFactory = parseResult => 5,
+            };
 
-            if (args.Length == 0)
-                filename = @"links.txt";
-            else
-                filename = args[0];
+            var timeoutOpt = new Option<int>("--timeout")
+            {
+                Description = "Таймаут в секундах, сколько мы ждем ответ от сервера. По-умолчанию 5.",
+                DefaultValueFactory = parseResult => 5,
+            };
+
+            RootCommand rootCommand = new();
+            rootCommand.Options.Add(filenameOpt);
+            rootCommand.Options.Add(maxThreadsOpt);
+            rootCommand.Options.Add(timeoutOpt);
+
+            rootCommand.SetAction(async parseResult =>
+            {
+                await RunProgram(
+                        parseResult.GetValue(filenameOpt),
+                        parseResult.GetValue(maxThreadsOpt),
+                        parseResult.GetValue(timeoutOpt));
+            });
+
+            ParseResult parseResult = rootCommand.Parse(args);
+            await parseResult.InvokeAsync();
+
+        }
+
+        static async Task RunProgram(string filename, int maxThreads, int timeout)
+        {
 
             string[] links;
 
@@ -71,14 +95,14 @@ namespace ConsoleApp1
 
             var resultList = new ConcurrentBag<CheckResultRecord>();
             int completedCount = 0;
-            var semaphore = new SemaphoreSlim(15);
+            var semaphore = new SemaphoreSlim(maxThreads);
             object _progressLock = new object();
             var progress = new ProgressReporter(links.Count());
 
             using (HttpClient client = new HttpClient())
             {
 
-                client.Timeout = TimeSpan.FromSeconds(5);
+                client.Timeout = TimeSpan.FromSeconds(timeout);
 
                 var tasks = links.Select(async link =>
                 {
