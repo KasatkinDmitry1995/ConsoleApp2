@@ -107,9 +107,6 @@ namespace ConsoleApp1
             foreach (CheckResultRecord result in resultList)
                 Console.WriteLine(result);
 
-           // var resultCounts = resultList.GroupBy(r => r.Result)
-           //           .Select(el => new { Result = el.Key, Count = el.Count() });
-
             var resultCounts = from r in resultList
                       group r by r.Result into g
                       select new { Result = g.Key, Count = g.Count() };
