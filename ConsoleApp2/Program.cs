@@ -1,13 +1,14 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.IO;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace ConsoleApp1
 {
@@ -91,23 +92,26 @@ namespace ConsoleApp1
                 return;
             }
 
-            Stopwatch sw = new Stopwatch();
-            var resultList = new List<CheckResultRecord>();
+            var resultList = new ConcurrentBag<CheckResultRecord>();
+            int completedCount = 0;
+            var semaphore = new SemaphoreSlim(15);
+            object _progressLock = new object();
             var progress = new ProgressReporter(links.Count());
-
 
             using (HttpClient client = new HttpClient())
             {
 
-                HttpResponseMessage response;
                 client.Timeout = TimeSpan.FromSeconds(5);
 
-                foreach (String link in links)
-                { 
+                var tasks = links.Select(async link =>
+                {
+
+                    await semaphore.WaitAsync();
                     try
                     {
-                        sw.Restart();
-                        response = await client.GetAsync(link);
+                        Stopwatch sw = new Stopwatch();
+                        sw.Start();
+                        var response = await client.GetAsync(link);
                         sw.Stop();
 
                         var result = FromHttpStatusCode((int)response.StatusCode);
@@ -120,31 +124,40 @@ namespace ConsoleApp1
                     catch (Exception ex)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.ERROR, 0));
-                    }finally
-                    {
-                        progress.Report(resultList.Count());
                     }
-                }
+                    finally
+                    {
+                        semaphore.Release();
+                        int completed = Interlocked.Increment(ref completedCount);
+                        lock (_progressLock)
+                        {
+                            progress.Report(completed);
+                        }
+                    }
+
+                });
+
+                await Task.WhenAll(tasks);
+
+                var resultListSorted = resultList.OrderBy(r => r.Result).ToList();
+
+                Console.Clear();
+
+                foreach (CheckResultRecord result in resultListSorted)
+                    Console.WriteLine(result);
+
+                var resultCounts = from r in resultListSorted
+                                   group r by r.Result into g
+                                   select new { Result = g.Key, Count = g.Count() };
+
+                Console.WriteLine($"Всего проанализировано ссылок: {resultListSorted.Count}");
+                Console.WriteLine("Из них:");
+
+                foreach (var resultCount in resultCounts)
+                    Console.WriteLine($"{resultCount.Result}: {resultCount.Count}");
+
+                Console.ReadKey();
             }
-
-            resultList.Sort((r1, r2) => r1.Result.CompareTo(r2.Result));
-
-            Console.Clear();
-
-            foreach (CheckResultRecord result in resultList)
-                Console.WriteLine(result);
-
-            var resultCounts = from r in resultList
-                      group r by r.Result into g
-                      select new { Result = g.Key, Count = g.Count() };
-
-            Console.WriteLine($"Всего проанализировано ссылок: {resultList.Count}");
-            Console.WriteLine("Из них:");
-
-            foreach(var resultCount in resultCounts)
-                Console.WriteLine($"{resultCount.Result}: {resultCount.Count}");
-
-            Console.ReadKey();
         }
     }
 }
