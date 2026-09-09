@@ -13,29 +13,6 @@ using System.Threading.Tasks;
 namespace ConsoleApp1
 {
 
-    public class ProgressReporter : IProgress<int>
-    {
-        private readonly int _total;
-        private readonly int _barSize;
-
-        public ProgressReporter(int total, int barSize = 50)
-        {
-            _total = total;
-            _barSize = barSize;
-        }
-
-        public void Report(int value)
-        {
-            double percent = (double)value / _total;
-            int filled = (int)(percent * _barSize);
-
-            Console.Write($"\r[");
-            Console.Write(new string('█', filled));
-            Console.Write(new string('░', _barSize - filled));
-            Console.Write($"] {percent:P0}");
-        }
-    }
-
     public record CheckResultRecord(string Link, CheckResult Result, long ElapsedMilliseconds)
     {
         public override string ToString()
@@ -117,21 +94,20 @@ namespace ConsoleApp1
                         var result = FromHttpStatusCode((int)response.StatusCode);
                         resultList.Add(new CheckResultRecord(link, result, sw.ElapsedMilliseconds));
                     }
-                    catch (TaskCanceledException ex)
+                    catch (TaskCanceledException)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.TIMEOUT, 0));
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.ERROR, 0));
                     }
                     finally
                     {
                         semaphore.Release();
-                        int completed = Interlocked.Increment(ref completedCount);
                         lock (_progressLock)
                         {
-                            progress.Report(completed);
+                            progress.Report(++completedCount);
                         }
                     }
 
