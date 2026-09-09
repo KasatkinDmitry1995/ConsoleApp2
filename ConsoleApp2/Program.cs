@@ -12,6 +12,29 @@ using System.Security.Cryptography.X509Certificates;
 namespace ConsoleApp1
 {
 
+    public class ProgressReporter : IProgress<int>
+    {
+        private readonly int _total;
+        private readonly int _barSize;
+
+        public ProgressReporter(int total, int barSize = 50)
+        {
+            _total = total;
+            _barSize = barSize;
+        }
+
+        public void Report(int value)
+        {
+            double percent = (double)value / _total;
+            int filled = (int)(percent * _barSize);
+
+            Console.Write($"\r[");
+            Console.Write(new string('█', filled));
+            Console.Write(new string('░', _barSize - filled));
+            Console.Write($"] {percent:P0}");
+        }
+    }
+
     public record CheckResultRecord(string Link, CheckResult Result, long ElapsedMilliseconds)
     {
         public override string ToString()
@@ -70,6 +93,8 @@ namespace ConsoleApp1
 
             Stopwatch sw = new Stopwatch();
             var resultList = new List<CheckResultRecord>();
+            var progress = new ProgressReporter(links.Count());
+
 
             using (HttpClient client = new HttpClient())
             {
@@ -78,31 +103,33 @@ namespace ConsoleApp1
                 client.Timeout = TimeSpan.FromSeconds(5);
 
                 foreach (String link in links)
-                {
+                { 
                     try
                     {
                         sw.Restart();
                         response = await client.GetAsync(link);
                         sw.Stop();
+
+                        var result = FromHttpStatusCode((int)response.StatusCode);
+                        resultList.Add(new CheckResultRecord(link, result, sw.ElapsedMilliseconds));
                     }
                     catch (TaskCanceledException ex)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.TIMEOUT, 0));
-                        continue;
                     }
                     catch (Exception ex)
                     {
                         resultList.Add(new CheckResultRecord(link, CheckResult.ERROR, 0));
-                        continue;
+                    }finally
+                    {
+                        progress.Report(resultList.Count());
                     }
-
-                    var result = FromHttpStatusCode((int)response.StatusCode);
-                    resultList.Add(new CheckResultRecord(link, result, sw.ElapsedMilliseconds));
-
                 }
             }
 
             resultList.Sort((r1, r2) => r1.Result.CompareTo(r2.Result));
+
+            Console.Clear();
 
             foreach (CheckResultRecord result in resultList)
                 Console.WriteLine(result);
